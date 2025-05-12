@@ -4,8 +4,15 @@ import ssl
 from kazoo.client import KazooClient
 
 app = Flask(__name__)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain('serv.crt', 'serv.key')
+context.load_verify_locations('root.pem')
+context.verify_mode = ssl.CERT_REQUIRED
+
 DATABASE = 'coincenter.db'
 ZK_HOSTS = '127.0.0.1:2181'
+
+
 
 # ZooKeeper初始化
 zk = KazooClient(hosts=ZK_HOSTS)
@@ -53,8 +60,9 @@ def handle_asset():
 
 if __name__ == '__main__':
     # SSL配置
-    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_3)
-    context.load_cert_chain('server.crt', 'server.key')
-    
-    # 启动服务
-    app.run(host='0.0.0.0', port=5000, ssl_context=context, debug=True)
+    app.run(
+        host='0.0.0.0', 
+        port=5000, 
+        ssl_context=context,
+        debug=True
+    )
