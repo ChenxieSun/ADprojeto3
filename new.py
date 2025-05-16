@@ -10,6 +10,7 @@ def get_db_connection():
 def create_user(is_manager):
     conn = get_db_connection()
     cur = conn.cursor()
+    # Clients表中没有name字段，只有client_id, is_manager, balance
     cur.execute("INSERT INTO Clients (is_manager, balance) VALUES (?, ?)", (is_manager, 0.0))
     conn.commit()
     user_id = cur.lastrowid
@@ -67,22 +68,28 @@ def withdraw(client_id, amount):
 def buy_asset(client_id, asset_symbol, quantity):
     conn = get_db_connection()
     cur = conn.cursor()
+    # 查询资产价格和库存
     cur.execute("SELECT price, available_quantity FROM Assets WHERE asset_symbol = ?", (asset_symbol,))
     asset = cur.fetchone()
     if not asset or asset["available_quantity"] < quantity:
         conn.close()
         return False
     total_price = asset["price"] * quantity
+    # 查询余额
     cur.execute("SELECT balance FROM Clients WHERE client_id = ?", (client_id,))
     balance = cur.fetchone()["balance"]
     if balance < total_price:
         conn.close()
         return False
+    # 扣除余额，减少库存
     cur.execute("UPDATE Clients SET balance = balance - ? WHERE client_id = ?", (total_price, client_id))
     cur.execute("UPDATE Assets SET available_quantity = available_quantity - ? WHERE asset_symbol = ?", (quantity, asset_symbol))
-    cur.execute(""" INSERT INTO ClientAssets (client_id, asset_symbol, quantity) VALUES (?, ?, ?) 
-                ON CONFLICT(client_id, asset_symbol) DO UPDATE SET quantity = quantity + excluded.quantity
-                """, (client_id, asset_symbol, quantity))    
+    # 更新客户资产（插入或更新）
+    cur.execute("""
+        INSERT INTO ClientAssets (client_id, asset_symbol, quantity) VALUES (?, ?, ?)
+        ON CONFLICT(client_id, asset_symbol) DO UPDATE SET quantity = quantity + excluded.quantity
+    """, (client_id, asset_symbol, quantity))
+    # 记录交易
     cur.execute("INSERT INTO Transactions (client_id, asset_symbol, type, quantity, price, time) VALUES (?, ?, 'BUY', ?, ?, ?)",
                 (client_id, asset_symbol, quantity, asset["price"], datetime.now().isoformat()))
     conn.commit()
@@ -92,17 +99,21 @@ def buy_asset(client_id, asset_symbol, quantity):
 def sell_asset(client_id, asset_symbol, quantity):
     conn = get_db_connection()
     cur = conn.cursor()
+    # 查询客户持有资产数量
     cur.execute("SELECT quantity FROM ClientAssets WHERE client_id = ? AND asset_symbol = ?", (client_id, asset_symbol))
-    user_asset = cur.fetchone()
-    if not user_asset or user_asset["quantity"] < quantity:
+    client_asset = cur.fetchone()
+    if not client_asset or client_asset["quantity"] < quantity:
         conn.close()
         return False
+    # 查询资产价格
     cur.execute("SELECT price FROM Assets WHERE asset_symbol = ?", (asset_symbol,))
     price = cur.fetchone()["price"]
     total_price = price * quantity
+    # 扣减客户资产，增加库存，增加余额
     cur.execute("UPDATE ClientAssets SET quantity = quantity - ? WHERE client_id = ? AND asset_symbol = ?", (quantity, client_id, asset_symbol))
     cur.execute("UPDATE Assets SET available_quantity = available_quantity + ? WHERE asset_symbol = ?", (quantity, asset_symbol))
     cur.execute("UPDATE Clients SET balance = balance + ? WHERE client_id = ?", (total_price, client_id))
+    # 记录交易
     cur.execute("INSERT INTO Transactions (client_id, asset_symbol, type, quantity, price, time) VALUES (?, ?, 'SELL', ?, ?, ?)",
                 (client_id, asset_symbol, quantity, price, datetime.now().isoformat()))
     conn.commit()
@@ -110,11 +121,9 @@ def sell_asset(client_id, asset_symbol, quantity):
     return True
 
 def get_transactions(start, end):
-    if len(end) == 10:  # YYYY-MM-DD
-        end += "T23:59:59"
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM Transactions WHERE time BETWEEN ? AND ?", (start, end))
-    transactions = cur.fetchall()
+    txs = cur.fetchall()
     conn.close()
-    return transactions
+    return txs

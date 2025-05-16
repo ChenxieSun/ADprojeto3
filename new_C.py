@@ -1,6 +1,4 @@
 import requests
-import json
-import requests
 
 BASE_URL = 'https://localhost:5000'
 CERT = ('certs/cli.crt', 'certs/cli.key')
@@ -38,10 +36,13 @@ while True:
             data = r.json()
             print(f"Balance: {data['balance']}")
             print("Assets:")
-            for asset in data['assets需要']:
+            for asset in data['assets']:
                 print(f"  Symbol: {asset['symbol']}, Quantity: {asset['quantity']}")
         else:
             safe_print_response(r)
+
+    # 其余命令类似，只是参数名称和字段名称根据新接口调整
+    # 例如 BUY/SELL 里的 client_id 和 symbol 等字段名称不变
 
     elif cmd == 'DEPOSIT':
         client_id = input("Client ID: ")
@@ -70,25 +71,10 @@ while True:
         safe_print_response(r)
 
     elif cmd == 'TRANSACTIONS':
-        client_id = input("Client ID: ")
-        r = session.get(
-            f"{BASE_URL}/transactions",
-            params={"client_id": client_id},
-            cert=CERT,
-            verify=CA
-        )
-        if r.status_code == 403:
-            print("Access denied: This user is not a manager.")
-            continue
-
-        if r.status_code == 404:
-            print("User not found.")
-            continue
-        if r.status_code == 200:
-            start = input("Start (YYYY-MM-DD): ")
-            end = input("End (YYYY-MM-DD): ")
-            r = session.get(f"{BASE_URL}/transactions", params={"client_id": client_id, "start": start, "end": end}, cert=CERT, verify=CA)
-            safe_print_response(r)
+        start = input("Start (YYYY-MM-DD): ")
+        end = input("End (YYYY-MM-DD): ")
+        r = session.get(f"{BASE_URL}/transactions", params={"start": start, "end": end}, cert=CERT, verify=CA)
+        safe_print_response(r)
 
     else:
         print("Unknown command. Please try again.")

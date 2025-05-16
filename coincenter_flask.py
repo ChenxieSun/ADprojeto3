@@ -1,68 +1,128 @@
 from flask import Flask, request, jsonify
-import sqlite3
+from coincenter_data import *
 import ssl
 from kazoo.client import KazooClient
 
 app = Flask(__name__)
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain('serv.crt', 'serv.key')
-context.load_verify_locations('root.pem')
-context.verify_mode = ssl.CERT_REQUIRED
-
-DATABASE = 'coincenter.db'
-ZK_HOSTS = '127.0.0.1:2181'
-
-
-
-# ZooKeeper初始化
-zk = KazooClient(hosts=ZK_HOSTS)
+zk = KazooClient(hosts='127.0.0.1:2181')
 zk.start()
+zk.ensure_path("/assets")
 
-# 数据库连接
-def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+def problem(detail, status):
+    return jsonify({
+        "type": "https://example.com/problem",
+        "title": "Erro",
+        "status": status,
+        "detail": detail
+    }), status
 
-# 初始化数据库
-def init_db():
-    with get_db() as conn:
-        with open('schema.sql', 'r') as f:
-            conn.executescript(f.read())
-        # 初始化管理员账户
-        conn.execute("INSERT INTO clients (is_manager, balance) VALUES (1, 0)")
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    is_manager = data.get('is_manager', 0)
+    try:
+        user_id = create_user(is_manager)
+        return jsonify({"client_id": user_id})
+    except Exception as e:
+        return problem(f"Login failed: {str(e)}", 400)
 
-# API路由
-@app.route('/asset', methods=['GET', 'POST'])
-def handle_asset():
-    if request.method == 'POST':
-        # 添加新资产 (仅管理员)
-        data = request.json
-        try:
-            with get_db() as conn:
-                conn.execute("INSERT INTO Assets VALUES (?, ?, ?, ?)", 
-                           (data['symbol'], data['asset_name'], data['price'], data['quantity']))
-                # ZooKeeper通知
-                zk.ensure_path("/Assets")
-                zk.create(f"/Assets/{data['symbol']}", b"new asset", ephemeral=True)
-            return jsonify({"status": "success"}), 201
-        except Exception as e:
-            return jsonify({"error": str(e)}), 400
+@app.route('/asset', methods=['POST'])
+def asset():
+    data = request.get_json()
+    symbol = data.get('symbol')
+    name = data.get('name')
+    price = data.get('price')
+    supply = data.get('supply')
+    if not all([symbol, name, price, supply]):
+        return problem("Missing asset parameters", 400)
+    if add_asset(symbol, name, price, supply):
+        zk.set("/assets", symbol.encode())
+        return jsonify({"status": "added"})
     else:
-        # 获取资产信息
-        symbol = request.args.get('symbol')
-        with get_db() as conn:
-            asset = conn.execute("SELECT * FROM Assets WHERE asset_symbol=?", (symbol,)).fetchone()
-            return jsonify(dict(asset)) if asset else ('', 404)
+        return problem("Asset already exists or invalid", 400)
 
-# 其他路由实现类似...
-# /login, /user, /buy, /sell, /deposit, /withdraw, /transactions
+@app.route('/user', methods=['GET'])
+def user():
+    client_id = request.args.get('id')
+    balance, assets = get_user_assets(client_id)
+    if balance is None:
+        return problem("User not found", 404)
+    return jsonify({
+        "balance": balance["balance"],
+        "assets": [{"symbol": a["asset_symbol"], "quantity": a["quantity"]} for a in assets]
+    })
+
+@app.route('/deposit', methods=['POST'])
+def deposit_route():
+    data = request.get_json()
+    client_id = data.get('client_id')
+    amount = data.get('amount')
+    deposit(client_id, amount)
+    return jsonify({"status": "deposited"})
+
+@app.route('/withdraw', methods=['POST'])
+def withdraw_route():
+    data = request.get_json()
+    client_id = data.get('client_id')
+    amount = data.get('amount')
+    if withdraw(client_id, amount):
+        return jsonify({"status": "withdrawn"})
+    else:
+        return problem("Insufficient balance", 400)
+
+@app.route('/buy', methods=['POST'])
+def buy_route():
+    data = request.get_json()
+    if buy_asset(data['client_id'], data['asset_symbol'], data['quantity']):
+        return jsonify({"status": "bought"})
+    return problem("Buy failed", 400)
+
+@app.route('/sell', methods=['POST'])
+def sell_route():
+    data = request.get_json()
+    if sell_asset(data['client_id'], data['asset_symbol'], data['quantity']):
+        return jsonify({"status": "sold"})
+    return problem("Sell failed", 400)
+
+@app.route('/transactions', methods=['GET'])
+def transactions():
+    client_id = request.args.get('client_id')
+
+    if not client_id:
+        return problem("Missing client_id", 400)
+
+    # 先检查是否为经理
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT is_manager FROM Clients WHERE client_id = ?", (client_id,))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return problem("User not found", 404)
+
+    if row["is_manager"] != 1:
+        return problem("Access denied: Only managers can view transactions", 403)
+    
+    
+    start = request.args.get('start')
+    end = request.args.get('end')
+    if not start or not end:
+        return jsonify({"status": "manager verified"}), 200
+
+    if len(end) == 10:
+        end += "T23:59:59"
+
+    txs = get_transactions(start, end)
+    return jsonify([{k: row[k] for k in row.keys()} for row in txs])
+
+    
+
 
 if __name__ == '__main__':
-    # SSL配置
-    app.run(
-        host='0.0.0.0', 
-        port=5000, 
-        ssl_context=context,
-        debug=True
-    )
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.load_cert_chain(certfile='certs/serv.crt', keyfile='certs/serv.key')
+    context.load_verify_locations(cafile='certs/root.pem')
+    context.verify_mode = ssl.CERT_REQUIRED
+
+    app.run(host='localhost', ssl_context=context, debug=True)
