@@ -17,14 +17,37 @@ def problem(detail, status):
     }), status
 
 @app.route('/login', methods=['POST'])
+@app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    is_manager = data.get('is_manager', 0)
+    input_id = data.get('client_id')
+
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        user_id = create_user(is_manager)
-        return jsonify({"client_id": user_id})
+        if input_id is not None:
+            cur.execute("SELECT client_id FROM Clients WHERE client_id = ?", (input_id,))
+            row = cur.fetchone()
+            if row:
+                # client exists
+                conn.close()
+                return jsonify({"client_id": input_id})
+            else:
+                # client not exists
+                cur.execute("INSERT INTO Clients(client_id, is_manager, balance) VALUES (?, 0, 0.0)", (input_id,))
+                conn.commit()
+                conn.close()
+                return jsonify({"client_id": input_id})
+        else:
+            # client_id is None, insert new and return generated id
+            cur.execute("INSERT INTO Clients(is_manager, balance) VALUES (0, 0.0)")
+            conn.commit()
+            new_id = cur.lastrowid
+            conn.close()
+            return jsonify({"client_id": new_id})
     except Exception as e:
         return problem(f"Login failed: {str(e)}", 400)
+
 
 @app.route('/asset', methods=['POST'])
 def asset():
@@ -43,14 +66,13 @@ def asset():
 
 @app.route('/user', methods=['GET'])
 def user():
-    client_id = request.args.get('id')
+    client_id = request.args.get('client_id')
     balance, assets = get_user_assets(client_id)
     if balance is None:
         return problem("User not found", 404)
-    return jsonify({
-        "balance": balance["balance"],
-        "assets": [{"symbol": a["asset_symbol"], "quantity": a["quantity"]} for a in assets]
-    })
+    return jsonify({"client_id":client_id,
+                    "balance": balance["balance"],
+                    "assets": [{"symbol": a["asset_symbol"], "quantity": a["quantity"]} for a in assets]})
 
 @app.route('/deposit', methods=['POST'])
 def deposit_route():
@@ -65,10 +87,9 @@ def withdraw_route():
     data = request.get_json()
     client_id = data.get('client_id')
     amount = data.get('amount')
-    if withdraw(client_id, amount):
-        return jsonify({"status": "withdrawn"})
-    else:
-        return problem("Insufficient balance", 400)
+    if withdraw(client_id, amassetsount):[{"symbol": a["asset_symbol"], 
+                    "quantity": a["quantity"]} for a in assets]
+    return problem("Buy failed", 400)
 
 @app.route('/buy', methods=['POST'])
 def buy_route():
@@ -114,15 +135,16 @@ def transactions():
         end += "T23:59:59"
 
     txs = get_transactions(start, end)
-    return jsonify([{k: row[k] for k in row.keys()} for row in txs])
+    return jsonify({"datas": [{"num":row["id"],"time":row["time"],"user":row["client_id"],"type":row["type"],"symbol":row["asset_symbol"],"quantity":row["quantity"],"price":row["price"]} for row in txs]})
+    #"assets": [{"symbol": a["asset_symbol"], "quantity": a["quantity"]} for a in assets]}
 
     
 
 
 if __name__ == '__main__':
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    context.load_cert_chain(certfile='certs/serv.crt', keyfile='certs/serv.key')
-    context.load_verify_locations(cafile='certs/root.pem')
+    context.load_cert_chain(certfile='serv.crt', keyfile='serv.key')
+    context.load_verify_locations(cafile='root.pem')
     context.verify_mode = ssl.CERT_REQUIRED
 
     app.run(host='localhost', ssl_context=context, debug=True)

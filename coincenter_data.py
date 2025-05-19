@@ -7,7 +7,7 @@ def get_db_connection():
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
-def create_user(is_manager):
+def create_user(client_id,is_manager):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("INSERT INTO Clients (is_manager, balance) VALUES (?, ?)", (is_manager, 0.0))
@@ -84,7 +84,7 @@ def buy_asset(client_id, asset_symbol, quantity):
                 ON CONFLICT(client_id, asset_symbol) DO UPDATE SET quantity = quantity + excluded.quantity
                 """, (client_id, asset_symbol, quantity))    
     cur.execute("INSERT INTO Transactions (client_id, asset_symbol, type, quantity, price, time) VALUES (?, ?, 'BUY', ?, ?, ?)",
-                (client_id, asset_symbol, quantity, asset["price"], datetime.now().isoformat()))
+                (client_id, asset_symbol, quantity, total_price, datetime.now().isoformat()))
     conn.commit()
     conn.close()
     return True
@@ -104,7 +104,7 @@ def sell_asset(client_id, asset_symbol, quantity):
     cur.execute("UPDATE Assets SET available_quantity = available_quantity + ? WHERE asset_symbol = ?", (quantity, asset_symbol))
     cur.execute("UPDATE Clients SET balance = balance + ? WHERE client_id = ?", (total_price, client_id))
     cur.execute("INSERT INTO Transactions (client_id, asset_symbol, type, quantity, price, time) VALUES (?, ?, 'SELL', ?, ?, ?)",
-                (client_id, asset_symbol, quantity, price, datetime.now().isoformat()))
+                (client_id, asset_symbol, quantity, total_price, datetime.now().isoformat()))
     conn.commit()
     conn.close()
     return True
